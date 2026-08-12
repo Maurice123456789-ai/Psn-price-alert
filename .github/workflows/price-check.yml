@@ -1,28 +1,40 @@
+```yaml
 name: Kinguin PSN Price Check
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
+
+  schedule:
+    - cron: "*/15 * * * *"
 
 jobs:
   check-price:
     runs-on: ubuntu-latest
+
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
     steps:
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
-          pip install requests cloudscraper beautifulsoup4
+          python -m pip install --upgrade pip
+          pip install requests playwright
+
+      - name: Install Chromium
+        run: |
+          python -m playwright install --with-deps chromium
 
       - name: Run price check
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python check_price.py
+        run: |
+          python check_price.py
+```
