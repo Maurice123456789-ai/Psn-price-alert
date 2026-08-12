@@ -1,129 +1,232 @@
+```python
 #!/usr/bin/env python3
-"""
-Kinguin PSN EUR 100 NL price checker for GitHub Actions
-Sends Telegram alert when price <= 87 EUR
-"""
 
 import os
 import re
 import sys
 import requests
 
-try:
-    import cloudscraper
-    HAS_CLOUDSCRAPER = True
-except ImportError:
-    HAS_CLOUDSCRAPER = False
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+
+PRODUCT_URL = (
+    "https://www.kinguin.net/category/95893/"
+    "playstation-network-eur-100-gift-card-nl"
+)
+
+TARGET_PRICE = 87.00
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "6571415052")
-PRODUCT_URL = "https://www.kinguin.net/category/95893/playstation-network-eur-100-gift-card-nl"
-TARGET_PRICE = 87.0
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-def send_telegram(message: str) -> bool:
+
+def send_telegram(message):
     if not BOT_TOKEN:
-        print("ERROR: TELEGRAM_BOT_TOKEN not set")
+        print("ERROR: TELEGRAM_BOT_TOKEN ontbreekt")
         return False
+
+    if not CHAT_ID:
+        print("ERROR: TELEGRAM_CHAT_ID ontbreekt")
+        return False
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
     payload = {
         "chat_id": CHAT_ID,
         "text": message,
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
     }
+
     try:
-        r = requests.post(url, data=payload, timeout=20)
-        print(f"Telegram response: {r.status_code}")
-        return r.json().get("ok", False)
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=20,
+        )
+
+        print(f"Telegram response: {response.status_code}")
+
+        if response.status_code != 200:
+            print(f"Telegram error: {response.text}")
+            return False
+
+        data = response.json()
+
+        if not data.get("ok"):
+            print(f"Telegram API error: {data}")
+            return False
+
+        print("Telegram bericht verzonden")
+        return True
+
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"Telegram request failed: {e}")
         return False
 
-def get_price():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
-    }
 
-    html = None
-    if HAS_CLOUDSCRAPER:
-        try:
-            scraper = cloudscraper.create_scraper()
-            resp = scraper.get(PRODUCT_URL, timeout=40)
-            if resp.status_code == 200:
-                html = resp.text
-                print("Fetched with cloudscraper")
-        except Exception as e:
-            print(f"cloudscraper failed: {e}")
-
-    if not html:
-        try:
-            resp = requests.get(PRODUCT_URL, headers=headers, timeout=40)
-            print(f"requests status: {resp.status_code}")
-            if resp.status_code == 200:
-                html = resp.text
-        except Exception as e:
-            print(f"requests failed: {e}")
-
-    if not html:
-        return None
-
-    # Extract prices
+def extract_prices(text):
     prices = []
-    # Look for patterns like €87.50, 87,50 €, $95.00 etc.
+
     patterns = [
-        r"[€$]\s*(\d+[.,]\d{2})",
-        r"(\d+[.,]\d{2})\s*[€$]",
-        r"(\d+[.,]\d{2})\s*EUR",
+        r"€\s*(\d{1,3}[.,]\d{2})",
+        r"(\d{1,3}[.,]\d{2})\s*€",
+        r"(\d{1,3}[.,]\d{2})\s*EUR",
     ]
-    for pat in patterns:
-        for match in re.findall(pat, html, re.IGNORECASE):
+
+    for pattern in patterns:
+        for match in re.findall(pattern, text, re.IGNORECASE):
             try:
-                val = float(match.replace(",", "."))
-                if 60.0 <= val <= 140.0:  # realistic range
-                    prices.append(val)
+                price = float(match.replace(",", "."))
+
+                # Realistische prijzen voor een €100 PSN kaart
+                if 60.00 <= price <= 140.00:
+                    prices.append(price)
+
             except ValueError:
                 pass
 
-    if prices:
-        lowest = min(prices)
-        print(f"Found prices: {sorted(set(prices))[:10]}... lowest={lowest}")
-        return lowest
-    print("No prices found in HTML")
-    return None
+    return sorted(set(prices))
+
+
+def get_price():
+    print("Starting Kinguin browser check...")
+
+    with sync_playwright() as p:
+
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+
+        context = browser.new_context(
+            locale="nl-NL",
+            timezone_id="Europe/Amsterdam",
+            viewport={
+                "width": 1366,
+                "height": 900,
+            },
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+        )
+
+        page = context.new_page()
+
+        try:
+            response = page.goto(
+                PRODUCT_URL,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+
+            if response:
+                print(f"Kinguin HTTP status: {response.status}")
+
+            # Even after domcontentloaded Kinguin may still be
+            # rendering prices with JavaScript.
+            page.wait_for_timeout(10000)
+
+            text = page.locator("body").inner_text()
+
+            print(f"Page text: {len(text)} characters")
+
+            # Debugbestand bewaren als artifact/log indien nodig
+            with open(
+                "kinguin_debug.txt",
+                "w",
+                encoding="utf-8",
+            ) as f:
+                f.write(text)
+
+            lower = text.lower()
+
+            # Detecteer Cloudflare challenge
+            cloudflare_signs = [
+                "checking your browser",
+                "verify you are human",
+                "just a moment",
+                "cloudflare",
+                "security check",
+            ]
+
+            if any(sign in lower for sign in cloudflare_signs):
+                print("Cloudflare challenge detected")
+                return None
+
+            prices = extract_prices(text)
+
+            print(f"Prices found: {prices}")
+
+            if not prices:
+                print("Geen prijzen gevonden")
+                return None
+
+            lowest = min(prices)
+
+            print(f"Lowest price found: €{lowest:.2f}")
+
+            return lowest
+
+        except PlaywrightTimeoutError:
+            print("Kinguin page loading timeout")
+            return None
+
+        except Exception as e:
+            print(f"Browser error: {e}")
+            return None
+
+        finally:
+            browser.close()
+
 
 def main():
-    print("Starting price check...")
+    print("================================")
+    print("Kinguin PSN Price Checker")
+    print("================================")
+    print(f"Target: €{TARGET_PRICE:.2f}")
+
     price = get_price()
 
     if price is None:
-        send_telegram(
-            "⚠️ <b>Prijscheck mislukt</b>\n\n"
-            "Kon de Kinguin-pagina niet ophalen (waarschijnlijk Cloudflare).\n"
-            f"<a href='{PRODUCT_URL}'>Bekijk handmatig</a>"
-        )
+        print("Prijs kon niet worden bepaald.")
+        print("Waarschijnlijk Cloudflare of gewijzigde pagina.")
         sys.exit(1)
 
-    msg = (
-        f"ℹ️ <b>Prijscheck</b>\n\n"
-        f"PSN EUR 100 Gift Card NL\n"
-        f"Laagste prijs nu: <b>€{price:.2f}</b>\n"
-        f"Target: ≤ €{TARGET_PRICE}\n\n"
-        f"<a href='{PRODUCT_URL}'>Bekijk op Kinguin</a>"
-    )
+    print(f"Current price: €{price:.2f}")
 
     if price <= TARGET_PRICE:
-        msg = (
-            f"🔥 <b>PRIJSALERT!</b>\n\n"
-            f"PSN EUR 100 Gift Card NL is nu <b>€{price:.2f}</b>\n"
-            f"Target was €{TARGET_PRICE}\n\n"
-            f"<a href='{PRODUCT_URL}'>➡️ Koop nu</a>"
-        )
-        print("ALERT TRIGGERED")
-    else:
-        print(f"Price €{price:.2f} is above target")
 
-    send_telegram(msg)
+        print("🔥 PRICE ALERT!")
+
+        message = (
+            "🔥 <b>PRIJSALERT!</b>\n\n"
+            "🎮 PSN EUR 100 Gift Card NL\n\n"
+            f"💰 Prijs: <b>€{price:.2f}</b>\n"
+            f"🎯 Target: €{TARGET_PRICE:.2f}\n\n"
+            f"<a href=\"{PRODUCT_URL}\">➡️ KOOP NU BIJ KINGUIN</a>"
+        )
+
+        if not send_telegram(message):
+            sys.exit(1)
+
+    else:
+
+        print(
+            f"€{price:.2f} is hoger dan target "
+            f"€{TARGET_PRICE:.2f}"
+        )
+
+        # Geen Telegrambericht boven de targetprijs.
+
 
 if __name__ == "__main__":
+    main()
+```
     main()
