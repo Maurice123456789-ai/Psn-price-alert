@@ -101,15 +101,24 @@ def get_price_eur():
             page.wait_for_timeout(10000)
 
             text = page.locator("body").inner_text()
+with open(
+    "kinguin_debug.txt",
+    "w",
+    encoding="utf-8"
+) as f:
+    f.write(text)
 
-            with open(
-                "kinguin_debug.txt",
-                "w",
-                encoding="utf-8"
-            ) as f:
-                f.write(text)
+lower = text.lower()
 
-            usd_price = extract_product_price_usd(text)
+if (
+    "security verification" in lower
+    or "verify you are human" in lower
+    or "cloudflare" in lower
+):
+    print("Cloudflare blokkade gedetecteerd")
+    sys.exit(0)
+
+usd_price = extract_product_price_usd(text)
 
             if usd_price is None:
                 return None
