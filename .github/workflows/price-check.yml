@@ -2,9 +2,8 @@ name: Kinguin PSN Price Check
 
 on:
   schedule:
-    # Every 30 minutes
     - cron: '*/30 * * * *'
-  workflow_dispatch:  # Manual run button
+  workflow_dispatch:
 
 jobs:
   check-price:
