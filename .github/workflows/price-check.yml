@@ -1,4 +1,3 @@
-
 name: Kinguin PSN Price Check
 
 on:
@@ -35,3 +34,12 @@ jobs:
 
       - name: Run price check
         run: python check_price.py
+        continue-on-error: true
+
+      - name: Upload Kinguin debug file
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kinguin-debug
+          path: kinguin_debug.txt
+          if-no-files-found: warn
