@@ -13,7 +13,7 @@ PRODUCT_URL = (
     "playstation-network-eur-100-gift-card-nl"
 )
 
-TARGET_PRICE = 87.00
+TARGET_PRICE_EUR = 87.00
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -64,27 +64,76 @@ def send_telegram(message):
         return False
 
 
-def extract_prices(text):
-    prices = []
+def get_usd_to_eur_rate():
+    print("USD -> EUR wisselkoers ophalen...")
 
-    patterns = [
-        r"€\s*(\d{1,3}[.,]\d{2})",
-        r"(\d{1,3}[.,]\d{2})\s*€",
-        r"(\d{1,3}[.,]\d{2})\s*EUR",
+    try:
+        response = requests.get(
+            "https://api.frankfurter.app/latest?from=USD&to=EUR",
+            timeout=20,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+        rate = float(data["rates"]["EUR"])
+
+        print(f"USD -> EUR koers: {rate:.6f}")
+
+        return rate
+
+    except Exception as e:
+        print(f"Kon USD -> EUR wisselkoers niet ophalen: {e}")
+        return None
+
+
+def extract_prices(text):
+    eur_prices = []
+    usd_prices = []
+
+    # Europrijzen zoals:
+    # €87.00
+    # €87,00
+    # 87.00 €
+    # 87,00 EUR
+    euro_patterns = [
+        r"€\s*(\d{1,3}(?:[.,]\d{2}))",
+        r"(\d{1,3}(?:[.,]\d{2}))\s*€",
+        r"(\d{1,3}(?:[.,]\d{2}))\s*EUR",
     ]
 
-    for pattern in patterns:
+    for pattern in euro_patterns:
         for match in re.findall(pattern, text, re.IGNORECASE):
             try:
                 price = float(match.replace(",", "."))
 
                 if 60.00 <= price <= 140.00:
-                    prices.append(price)
+                    eur_prices.append(price)
 
             except ValueError:
                 pass
 
-    return sorted(set(prices))
+    # Dollarprijzen zoals:
+    # $112.39
+    # $107.89
+    # 112.39 USD
+    usd_patterns = [
+        r"\$\s*(\d{1,3}(?:[.,]\d{2}))",
+        r"(\d{1,3}(?:[.,]\d{2}))\s*USD",
+    ]
+
+    for pattern in usd_patterns:
+        for match in re.findall(pattern, text, re.IGNORECASE):
+            try:
+                price = float(match.replace(",", "."))
+
+                if 60.00 <= price <= 160.00:
+                    usd_prices.append(price)
+
+            except ValueError:
+                pass
+
+    return sorted(set(eur_prices)), sorted(set(usd_prices))
 
 
 def get_price():
@@ -117,6 +166,8 @@ def get_price():
         page = context.new_page()
 
         try:
+            print("Opening Kinguin...")
+
             response = page.goto(
                 PRODUCT_URL,
                 wait_until="domcontentloaded",
@@ -126,12 +177,14 @@ def get_price():
             if response:
                 print(f"Kinguin HTTP status: {response.status}")
 
+            # Geef JavaScript voldoende tijd om prijzen te laden.
             page.wait_for_timeout(10000)
 
             text = page.locator("body").inner_text()
 
             print(f"Page text: {len(text)} characters")
 
+            # Debugbestand bewaren.
             with open(
                 "kinguin_debug.txt",
                 "w",
@@ -153,19 +206,54 @@ def get_price():
                 print("Cloudflare challenge detected")
                 return None
 
-            prices = extract_prices(text)
+            eur_prices, usd_prices = extract_prices(text)
 
-            print(f"Prices found: {prices}")
+            print(f"EUR prices found: {eur_prices}")
+            print(f"USD prices found: {usd_prices}")
 
-            if not prices:
-                print("Geen prijzen gevonden")
-                return None
+            # Als er EUR-prijzen gevonden worden, gebruiken we die.
+            if eur_prices:
+                lowest = min(eur_prices)
 
-            lowest = min(prices)
+                print(f"Lowest EUR price found: €{lowest:.2f}")
 
-            print(f"Lowest price found: €{lowest:.2f}")
+                return lowest
 
-            return lowest
+            # Geen EUR maar wel USD gevonden:
+            if usd_prices:
+                usd_rate = get_usd_to_eur_rate()
+
+                if usd_rate is None:
+                    print("USD-prijs gevonden, maar conversie naar EUR mislukt.")
+                    return None
+
+                converted_prices = [
+                    price * usd_rate
+                    for price in usd_prices
+                ]
+
+                print(
+                    "USD prijzen omgerekend naar EUR: "
+                    + ", ".join(
+                        f"${usd:.2f} -> €{eur:.2f}"
+                        for usd, eur in zip(
+                            usd_prices,
+                            converted_prices,
+                        )
+                    )
+                )
+
+                lowest_eur = min(converted_prices)
+
+                print(
+                    f"Laagste omgerekende prijs: "
+                    f"€{lowest_eur:.2f}"
+                )
+
+                return lowest_eur
+
+            print("Geen EUR- of USD-prijzen gevonden.")
+            return None
 
         except PlaywrightTimeoutError:
             print("Kinguin page loading timeout")
@@ -183,25 +271,24 @@ def main():
     print("================================")
     print("Kinguin PSN Price Checker")
     print("================================")
-    print(f"Target: €{TARGET_PRICE:.2f}")
+    print(f"Target: €{TARGET_PRICE_EUR:.2f}")
 
-    price = get_price()
+    price_eur = get_price()
 
-    if price is None:
+    if price_eur is None:
         print("Prijs kon niet worden bepaald.")
-        print("Waarschijnlijk Cloudflare of gewijzigde pagina.")
         sys.exit(1)
 
-    print(f"Current price: €{price:.2f}")
+    print(f"Current price in EUR: €{price_eur:.2f}")
 
-    if price <= TARGET_PRICE:
+    if price_eur <= TARGET_PRICE_EUR:
         print("🔥 PRICE ALERT!")
 
         message = (
             "🔥 <b>PRIJSALERT!</b>\n\n"
             "🎮 PSN EUR 100 Gift Card NL\n\n"
-            f"💰 Prijs: <b>€{price:.2f}</b>\n"
-            f"🎯 Target: €{TARGET_PRICE:.2f}\n\n"
+            f"💰 Prijs: <b>€{price_eur:.2f}</b>\n"
+            f"🎯 Target: €{TARGET_PRICE_EUR:.2f}\n\n"
             f'<a href="{PRODUCT_URL}">➡️ KOOP NU BIJ KINGUIN</a>'
         )
 
@@ -210,8 +297,8 @@ def main():
 
     else:
         print(
-            f"€{price:.2f} is hoger dan target "
-            f"€{TARGET_PRICE:.2f}"
+            f"€{price_eur:.2f} is hoger dan target "
+            f"€{TARGET_PRICE_EUR:.2f}"
         )
 
 
