@@ -1,4 +1,4 @@
-```yaml
+
 name: Kinguin PSN Price Check
 
 on:
@@ -16,7 +16,6 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
-
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -35,6 +34,4 @@ jobs:
           python -m playwright install --with-deps chromium
 
       - name: Run price check
-        run: |
-          python check_price.py
-```
+        run: python check_price.py
