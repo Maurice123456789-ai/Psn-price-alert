@@ -1,22 +1,3 @@
-
-Zeker. Deze versie:
-
-gebruikt alleen jouw PSN EUR 100 Gift Card NL-pagina;
-
-herkent zowel EUR als USD;
-
-zet USD automatisch om naar EUR;
-
-gebruikt een actuele wisselkoers via een openbare exchange-rate API;
-
-vergelijkt daarna met jouw doelprijs van €87;
-
-stuurt alleen een Telegram-alert als de omgerekende prijs ≤ €87 is;
-
-bewaart de pagina als kinguin_debug.txt.
-
-Vervang je volledige check_price.py hiermee:
-
 #!/usr/bin/env python3
 
 import os
