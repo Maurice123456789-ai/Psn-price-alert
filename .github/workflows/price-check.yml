@@ -35,4 +35,3 @@ jobs:
 
       - name: Run price check
         run: python check_price.py
-```
